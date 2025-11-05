@@ -1,5 +1,6 @@
 package org.checkerframework.checker.signedness;
-
+import com.sun.source.tree.UnaryTree;
+import org.checkerframework.checker.signedness.qual.BitPattern;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.CompoundAssignmentTree;
 import com.sun.source.tree.ExpressionTree;
@@ -72,10 +73,6 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
   protected final AnnotationMirror SIGNEDNESS_BOTTOM =
       AnnotationBuilder.fromClass(elements, SignednessBottom.class);
 
-  /** The @PolySigned annotation. */
-  protected final AnnotationMirror POLY_SIGNED =
-      AnnotationBuilder.fromClass(elements, PolySigned.class);
-
   /** The @NonNegative annotation of the Index Checker, as represented by the Value Checker. */
   private final AnnotationMirror INT_RANGE_FROM_NON_NEGATIVE =
       AnnotationBuilder.fromClass(elements, IntRangeFromNonNegative.class);
@@ -101,6 +98,14 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
 
   /** A set containing just {@code @Unsigned}. */
   private final AnnotationMirrorSet UNSIGNED_SINGLETON = new AnnotationMirrorSet(UNSIGNED);
+
+  /** The @PolySigned annotation. */
+  protected final AnnotationMirror POLY_SIGNED =
+      AnnotationBuilder.fromClass(elements, PolySigned.class);
+
+  /** The @BitPattern annotation. */
+  protected final AnnotationMirror BIT_PATTERN =
+      AnnotationBuilder.fromClass(elements, BitPattern.class);
 
   /**
    * Create a SignednessAnnotatedTypeFactory.
@@ -282,6 +287,7 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
    *   <li>shift results take on the type of their left operand,
    *   <li>the types of identifiers are refined based on the results of the Value Checker.
    *   <li>casts take types related to widening
+   *   <li>@BitPattern types are handled correctly for operations
    * </ul>
    */
   private class SignednessTreeAnnotator extends TreeAnnotator {
@@ -291,7 +297,74 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
     }
 
     @Override
+    public Void visitUnary(UnaryTree tree, AnnotatedTypeMirror type) {
+      AnnotatedTypeMirror operandType = getAnnotatedType(tree.getExpression());
+
+      if (operandType.hasPrimaryAnnotation(BIT_PATTERN)) {
+        switch (tree.getKind()) {
+          case BITWISE_COMPLEMENT:
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+          case UNARY_PLUS:
+          case UNARY_MINUS:
+          case PREFIX_INCREMENT:
+          case PREFIX_DECREMENT:
+          case POSTFIX_INCREMENT:
+          case POSTFIX_DECREMENT:
+            checker.reportError(tree, "unary.bitpattern");
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+          default:
+            type.replaceAnnotation(BIT_PATTERN);
+        }
+        return null;
+      }
+      return super.visitUnary(tree, type);
+    }
+
+    @Override
     public Void visitBinary(BinaryTree tree, AnnotatedTypeMirror type) {
+      AnnotatedTypeMirror leftType = getAnnotatedType(tree.getLeftOperand());
+      AnnotatedTypeMirror rightType = getAnnotatedType(tree.getRightOperand());
+
+      if (leftType.hasAnnotation(BIT_PATTERN) || rightType.hasAnnotation(BIT_PATTERN)) {
+        switch (tree.getKind()) {
+          case AND:
+          case OR:
+          case XOR:
+          case LEFT_SHIFT:
+          case RIGHT_SHIFT:
+          case UNSIGNED_RIGHT_SHIFT:
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+
+          case PLUS:
+            if (TreeUtils.isStringConcatenation(tree)) {
+              checker.reportError(tree, "bitpattern.concat");
+              return null;
+            }
+            // Fall through
+
+          case MINUS:
+          case MULTIPLY:
+          case DIVIDE:
+          case REMAINDER:
+          case LESS_THAN:
+          case LESS_THAN_EQUAL:
+          case GREATER_THAN:
+          case GREATER_THAN_EQUAL:
+          case EQUAL_TO:
+          case NOT_EQUAL_TO:
+            checker.reportError(tree, "operation.bitpattern");
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+
+          default:
+            type.replaceAnnotation(BIT_PATTERN);
+        }
+        return null;
+      }
+
       switch (tree.getKind()) {
         case LEFT_SHIFT:
         case RIGHT_SHIFT:
@@ -314,6 +387,39 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
 
     @Override
     public Void visitCompoundAssignment(CompoundAssignmentTree tree, AnnotatedTypeMirror type) {
+      AnnotatedTypeMirror leftType = getAnnotatedType(tree.getVariable());
+
+      if (leftType.hasAnnotation(BIT_PATTERN)) {
+        switch (tree.getKind()) {
+          case AND_ASSIGNMENT:
+          case OR_ASSIGNMENT:
+          case XOR_ASSIGNMENT:
+          case LEFT_SHIFT_ASSIGNMENT:
+          case RIGHT_SHIFT_ASSIGNMENT:
+          case UNSIGNED_RIGHT_SHIFT_ASSIGNMENT:
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+
+          case PLUS_ASSIGNMENT:
+            if (TreeUtils.isStringCompoundConcatenation(tree)) {
+              checker.reportError(tree, "bitpattern.concat");
+              return null;
+            }
+            // Fall through
+          case MINUS_ASSIGNMENT:
+          case MULTIPLY_ASSIGNMENT:
+          case DIVIDE_ASSIGNMENT:
+          case REMAINDER_ASSIGNMENT:
+            checker.reportError(tree, "compound.assignment.bitpattern");
+            type.replaceAnnotation(BIT_PATTERN);
+            break;
+
+          default:
+            type.replaceAnnotation(BIT_PATTERN);
+        }
+        return null;
+      }
+
       if (TreeUtils.isStringCompoundConcatenation(tree)) {
         if (TypesUtils.isCharOrCharacter(TreeUtils.typeOf(tree.getExpression()))) {
           type.replaceAnnotation(SIGNED);
@@ -334,8 +440,6 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
           type.addAnnotation(SIGNED);
         }
       }
-      log("SATF.visitTypeCast(%s, ...) final: %s%n", tree, type);
-      log("SATF: treeAnnotator=%s%n", treeAnnotator);
       return null;
     }
   }
@@ -439,16 +543,20 @@ public class SignednessAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
         return a1;
       } else if (AnnotationUtils.areSame(a1, a2)) {
         return a1;
+      } else if (AnnotationUtils.areSame(a1, BIT_PATTERN) || AnnotationUtils.areSame(a2, BIT_PATTERN)) {
+        // @BitPattern is incompatible with @Signed/@Unsigned in polymorphic contexts
+        return SIGNEDNESS_BOTTOM;
       } else if (qualHierarchy.isSubtypeQualifiersOnly(a1, a2)) {
         return a2;
       } else if (qualHierarchy.isSubtypeQualifiersOnly(a2, a1)) {
         return a1;
-      } else
+      } else {
         // The two annotations are incomparable
         // TODO: Issue a warning at the proper code location.
         // TODO: Returning bottom leads to obscure error messages.  It would probably be
         // better to issue a warning in this method, then return lub as usual.
         return SIGNEDNESS_BOTTOM;
+      }
     }
   }
 
