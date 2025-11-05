@@ -1,0 +1,6 @@
+- Initial build failed due to incorrect versions of react-native-reanimated and react-native-svg (for Expo environment).
+- Compilation failed due to missing MethodInvocationTree import.
+- Multiple recursion/stack traces in SignednessTreeAnnotator due to repeated visits of method invocations.
+- Eight expected diagnostics in BitPatternOperations test were not produced.
+- Still seeing SignednessTest failing for some tests.
+- Confusion around how generics and AnnotatedTypeMirror interact with tree visitors.
