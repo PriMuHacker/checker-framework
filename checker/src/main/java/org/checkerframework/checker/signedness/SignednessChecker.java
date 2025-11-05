@@ -1,12 +1,10 @@
 package org.checkerframework.checker.signedness;
-
 import java.util.Set;
 import org.checkerframework.common.basetype.BaseTypeChecker;
 import org.checkerframework.common.value.ValueChecker;
 import org.checkerframework.framework.qual.RelevantJavaTypes;
 import org.checkerframework.framework.qual.StubFiles;
 import org.checkerframework.framework.source.SourceChecker;
-
 /**
  * A type-checker that prevents mixing of unsigned and signed values, and prevents meaningless
  * operations on unsigned values.
@@ -25,12 +23,10 @@ import org.checkerframework.framework.source.SourceChecker;
   int.class,
   long.class,
 })
-@StubFiles({"junit-assertions.astub"})
+@StubFiles({"signedness.astub", "junit-assertions.astub"})
 public class SignednessChecker extends BaseTypeChecker {
-
   /** Creates a new SignednessChecker. */
   public SignednessChecker() {}
-
   @Override
   protected Set<Class<? extends SourceChecker>> getImmediateSubcheckerClasses() {
     Set<Class<? extends SourceChecker>> checkers = super.getImmediateSubcheckerClasses();
